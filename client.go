@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"log"
 )
 
@@ -51,7 +51,7 @@ func (h *Handler) containerCreate(s *Session, hostname, imageName string) (*Inst
 			if err = h.pullImage(context.Background(), imageName); err != nil {
 				return nil, err
 			}
-			container, err = h.C.ContainerCreate(context.Background(), cf, h, nil, containerName)
+			container, err = h.C.ContainerCreate(context.Background(), cf, hc, nil, containerName)
 			if err != nil {
 				return nil, err
 			}
@@ -75,7 +75,6 @@ func (h *Handler) containerCreate(s *Session, hostname, imageName string) (*Inst
 		s.Instances = make(map[string]*Instance)
 	}
 	s.Instances[instance.Name] = instance
-	h.So.BroadcastTo(s.Id, "new instance", instance.Name, instance.Ip, instance.Hostname)
 	go h.InstanceAttach(instance, s)
 	return instance, err
 }

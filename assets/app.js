@@ -23,14 +23,17 @@
         $scope.experiment='';
         $scope.sessionContent = '';
         $scope.sessions = [];
-
-        sessionToResume=function (value) {
+        $scope.sessionToResume=function (value) {
             if (value !== undefined){
                 localStorage.setItem("sessionToResume",value);
                 return
             }
+            var session = localStorage.getItem("sessionToResume");
+            if (session == null){
+                return null
+            }
             console.log("sessionToResume: "+localStorage.getItem("sessionToResume"))
-            return localStorage.getItem("sessionToResume");
+            return session;
         }
 
         var selectedKeyboardShortcuts = KeyboardShortcutService.getCurrentShortcuts();
@@ -68,7 +71,7 @@
         $scope.closeSession = function() {
             // Remove alert before closing browser tab
             window.onbeforeunload = null;
-            $scope.socket.emit('session close');
+            $scope.socket.emit('session close',$scope.username);
         }
 
         $scope.upsertInstance = function(info) {
@@ -92,7 +95,7 @@
                 .placeholder('Session')
                 .ariaLabel('Session')
                 .initialValue('session is stored for ...')
-                .required(true)
+                // .required(true)
                 .ok('Okay!');
 
             $mdDialog.show(confirm).then(function(result) {
@@ -104,14 +107,13 @@
             }, function() {
             });
         };
-
-        storeSession = function () {
+        function storeSession() {
             updateSessionBtnState(true);
-            $http(
+            $http({
                 method: 'POST',
-                url: '/users/'+$scope.username+'/sessions/'+$scope.sessionId+'/store',
-                data: {Name:$scope.sessionId, Content:$scope.sessionContent }
-        ).then(function(response){
+                url: '/users/' + $scope.username + '/sessions/' + $scope.sessionId + '/store',
+                data: {Name: $scope.sessionId, Content: $scope.sessionContent}
+            }).then(function(response){
                 $scope.showAlert("success","you have successfully store the session" +
                     "and you can delete it at your accoun center")
             },function(response){
@@ -153,20 +155,28 @@
             });
         };
 
-        resumeSession = function () {
+        function resumeSession() {
             updateResumeSessionBtnState(true);
             var session = localStorage.getItem("sessionToResume");
             if (session == null){
                 $scope.showAlert("session resume","No session been selected to resume");
                 return
             }
+            if (session == $scope.sessionId){
+                $scope.showAlert("session resume error","cannot resume current session");
+                return
+            }
             console.log("session to store: "+session);
-            document.getElementById("closeSession").click();
-            $http(
-                method: 'POST',
-                url: '/uesrs/'+$scope.username+'/sessions/'+session+'/resume'
-            ).then(function(response){
+            window.onbeforeunload = null;
+            $scope.socket.emit('session close',$scope.username);
+            $http({
+                method: 'GET',
+                url: '/users/' + $scope.username + '/sessions/' + session + '/resume'
+            }).then(function(response){
                 $scope.showAlert("success","session resume has been successfully,please wait for a while ...");
+                var a = response.data.split(",");
+                console.log(a)
+                document.write('<a href="/p/'+a[1]+'"'+'>click here jump</a>')
             },function (response) {
                 $scope.showAlert("session resume failed","session resume failed");
             }).finally(function () {
@@ -197,7 +207,7 @@
                 //TODO:发送mount的请求将目录进行挂载
                 data : { ImageName : ImageName }
             }).then(function(response) {
-                console.log("new instance info:"+response.data)
+                console.log("new instance info:"+response.data);
                 var i = $scope.upsertInstance(response.data);
                 $scope.showInstance(i);
             }, function(response) {
@@ -215,7 +225,7 @@
             }).then(function(response) {
                 var socket = io({ path: '/sessions/' + sessionId + '/ws' });
 
-                socket.on('terminal out', function(name,hostname,ip, data) {
+                socket.on('terminal out', function(name, data) {
                     var instance = $scope.idx[name];
 
                     if (!instance) {
@@ -249,13 +259,12 @@
                     $scope.removeInstance(name);
                     $scope.$apply();
                 });
-                socket.on('session store', function(session) {
+                socket.on('session stored', function(session) {
                     $scope.sessions.push(session);
                 });
 
                 socket.on('viewport resize', function(cols, rows) {
                     // viewport has changed, we need to resize all terminals
-
                     $scope.instances.forEach(function(instance) {
                         instance.term.resize(cols, rows);
                     });
@@ -286,8 +295,7 @@
                     InstanceService.setDesiredImage(i.user.image_name)
                     $scope.ImageName = i.user.image_name;
                 }
-                var sessionArrays = JSON.parse(i.user.sessions);
-                for (var i in sessionArrays){
+                for (var i in i.user.sessions){
                     $scope.sessions.push(i);
                 }
                 // If instance is passed in URL, select it
@@ -304,14 +312,16 @@
         $scope.showInstance = function(instance) {
             $scope.selectedInstance = instance;
             $location.hash(instance.name);
+            if (!instance.creatingTerminal) {
                 if (!instance.term) {
-                    $timeout(function() {
+                    $timeout(function () {
                         createTerminal(instance);
                         TerminalService.setFontSize(TerminalService.getFontSize());
                         instance.term.focus();
                     }, 0, false);
                     return
                 }
+            }
             $timeout(function() {
                 instance.term.focus();
             }, 0, false);
@@ -499,7 +509,7 @@
                         localStorage.setItem("settings.imageLimit",value) ;
                         return;
                     }
-                    $ctrl.imageLimit = localStorage.getItem("settings.imageLimit") ;
+                    var imageLimit = localStorage.getItem("settings.imageLimit") ;
                     if (imageLimit == null){
                         return 5 ;
                     }
@@ -556,7 +566,7 @@
             }
 
             function setDesiredImage(image) {
-                if (image === null)
+                if (image == null)
                     localStorage.removeItem("settings.desiredImage");
                 else
                     localStorage.setItem("settings.desiredImage", image);

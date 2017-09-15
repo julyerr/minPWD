@@ -2,9 +2,9 @@ package main
 
 import (
 	"flag"
-	"github.com/docker/docker/client"
 	"github.com/googollee/go-socket.io"
 	"github.com/gorilla/mux"
+	"github.com/moby/moby/client"
 	"log"
 	"net/http"
 	"time"
@@ -18,6 +18,8 @@ func ParseFlags() {
 	flag.BoolVar(&Debug, "debug", false, "whether to run in debug")
 	flag.Parse()
 }
+
+//TODO:如果改用数据库而不是内存存储的话，考虑初始化的时候将数据从数据库加载进内存
 
 func main() {
 	ParseFlags()
@@ -48,11 +50,11 @@ func main() {
 	//r.HandleFunc("/sessions/{sessionId}/instances/{instanceId}/stop",handler.StopContainer).Methods("POST")
 	r.HandleFunc("/sessions/{sessionId}/instances/{instanceId}/delete", handler.ContainerRemove).Methods("DELETE")
 	r.HandleFunc("/users/{username}/sessions/{sessionId}/store", handler.SessionStore).Methods("POST")
-	r.HandleFunc("/users/{username}/sessions/{sessionId}/resume", handler.SessionResume).Methods("POST")
+	r.HandleFunc("/users/{username}/sessions/{sessionId}/resume", handler.SessionResume).Methods("GET")
 	r.HandleFunc("/users/{username}/sessions/{sessionId}/delete", handler.SessionDelete).Methods("POST")
 	r.HandleFunc("/sessions/{sessionId}/instances/create", handler.ContainerCreate).Methods("POST")
 	r.HandleFunc("/images/search", handler.ImageSearch).Methods("POST")
-	r.Handle("/{sessionId}/ws/", server)
+	r.Handle("/sessions/{sessionId}/ws/", server)
 	httpServer := http.Server{
 		Addr:              "0.0.0.0:" + Port,
 		Handler:           r,

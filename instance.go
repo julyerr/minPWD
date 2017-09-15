@@ -6,10 +6,10 @@ import (
 )
 
 type Instance struct {
-	Name     string   `json:name`
-	Image    string   `json:image`
-	Terminal net.Conn `json:-`
-	Ip       string   `json:ip`
+	Name     string   `json:"name"`
+	Image    string   `json:"image"`
+	Terminal net.Conn `json:"-"`
+	Ip       string   `json:"ip"`
 	Hostname string `json:"hostname"`
 	rw sync.Mutex
 }

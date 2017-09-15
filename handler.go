@@ -4,19 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/docker/distribution/refrence"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/jsonmessage"
+	"github.com/docker/distribution/reference"
 	"github.com/googollee/go-socket.io"
 	"github.com/gorilla/mux"
+	"github.com/moby/moby/api/types"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/pkg/jsonmessage"
 	"golang.org/x/text/encoding"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 )
 
 type Handler struct {
@@ -34,7 +33,7 @@ type InstanceWriter struct {
 }
 
 func (iw *InstanceWriter) Write(p []byte) (n int, err error) {
-	iw.Handler.So.BroadcastTo(iw.Session.Id, "terminal out", iw.Instance.Name, iw.Instance.Hostname, iw.Instance.Ip, string(p))
+	iw.Handler.So.BroadcastTo(iw.Session.Id, "terminal out", iw.Instance.Name, string(p))
 	return len(p), nil
 }
 
@@ -90,65 +89,94 @@ func (h *Handler) SessionStore(w http.ResponseWriter, r *http.Request) {
 	//对于用户输入的情况下进行条件判断 是否存在
 	username := vars["username"]
 	sessionId := vars["sessionId"]
+	u ,s := h.U[username],h.S[sessionId]
+	if u == nil||s == nil{
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	body := &SessionContent{}
 	json.NewDecoder(r.Body).Decode(&body)
-	if len(h.U[username].Sessions) >= 1 {
+	if len(u.Sessions) >= 1 {
 		w.WriteHeader(http.StatusConflict)
 		return
 	}
-	for k, _ := range h.U[username].Sessions {
+	for k, _ := range u.Sessions {
 		if k == sessionId {
 			w.WriteHeader(http.StatusNotAcceptable)
 			return
 		}
 	}
-	images := []string{}
-	for _, instance := range h.S[sessionId].Instances {
+	images := make(map[string]string)
+	for i, instance := range s.Instances {
 		id, err := h.C.ContainerCommit(context.Background(), instance.Name, types.ContainerCommitOptions{})
 		if err != nil {
 			log.Fatal(err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		images = append(images, id[:10])
+		if strings.Contains(id.ID,"sha256") {
+			images[i]=id.ID[7:17]
+		}else{
+			images[i]=id.ID
+		}
 	}
-	h.U[username].Sessions[sessionId] = images
+	u.Sessions[sessionId] = images
+	u.Resumes[sessionId]=false
 	h.So.BroadcastTo(sessionId, "session stored", sessionId)
 }
 
 func (h *Handler) SessionResume(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	username := vars["username"]
+	u := h.U[username]
+	if u == nil{
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	sessionId := vars["sessionId"]
 
 	s := &Session{}
 	s.User = &User{}
+	s.User = h.U[username]
 	s.Instances = make(map[string]*Instance)
 	s.Id = sessionId
 	h.S[s.Id] = s
+	if ! u.Resumes[sessionId] {
 
-	go http.Redirect(w, r, fmt.Sprintf("http://%s/p/%s", r.Host, s.Id), http.StatusFound)
-	//waiting for client to get the session first
-	time.Sleep(time.Second * 2)
-	for _, v := range h.U[username].Sessions[sessionId] {
-		if _, err := h.containerCreate(s, "", v); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+		go func() {
+			for k, v := range u.Sessions[sessionId] {
+				if _, err := h.containerCreate(s, k, v); err != nil {
+					//w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				u.Resumes[sessionId] = true
+			}
+		}()
+	}else{
+		fmt.Printf("User %s session %s has been resumed\n",username,sessionId)
 	}
+	//waiting for client to get the session first
+	//time.Sleep(time.Second * 1)
+	w.Write([]byte(r.Host+","+s.Id))
+	//http.Redirect(w, r, fmt.Sprintf("http://%s/p/%s", r.Host, s.Id), http.StatusFound)
 }
 
 func (h *Handler) SessionDelete(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	username := vars["username"]
 	sessionId := vars["sessionId"]
+	u ,s := h.U[username],h.S[sessionId]
+	if u == nil{
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	//该session正被使用
-	if h.S[sessionId] != nil {
+	if s != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	delete(h.U[username].Sessions, sessionId)
-	if len(h.U[username].Sessions) == 0 {
+	delete(u.Sessions, sessionId)
+	if len(u.Sessions) == 0 {
 		delete(h.U, username)
 	}
 }
@@ -160,6 +188,10 @@ func (h *Handler) ContainerCreate(w http.ResponseWriter, r *http.Request) {
 	body := &InstanceConfig{}
 	json.NewDecoder(r.Body).Decode(&body)
 	s := h.S[sessionId]
+	if s == nil{
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	if len(s.Instances) >= 3 {
 		w.WriteHeader(http.StatusConflict)
 		return
@@ -170,6 +202,7 @@ func (h *Handler) ContainerCreate(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	h.So.BroadcastTo(s.Id, "new instance", instance.Name, instance.Ip, instance.Hostname)
 	json.NewEncoder(w).Encode(instance)
 }
 
@@ -183,7 +216,10 @@ func (h *Handler) ContainerRemove(w http.ResponseWriter, r *http.Request) {
 	//TODO:对于一些可能恶意攻击的请求，可能导致出错，后面加强判断和处理
 	s := h.S[sessionId]
 	instance := s.Instances[instanceName]
-
+	if s== nil || instance == nil{
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	if instance.Terminal != nil {
 		instance.Terminal.Close()
 	}

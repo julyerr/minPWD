@@ -25,8 +25,9 @@ func (h *Handler) WS(so socketio.Socket) {
 	c := &Client{Id:so.Id()}
 	s.Clients = append(s.Clients,c)
 
-	so.On("session close",func(){
-		h.SessionClose(s)
+	so.On("session close",func(username string){
+		u := h.U[username]
+		h.SessionClose(s,u)
 	})
 	so.On("terminal in", func(name,data string) {
 		// User wrote something on the terminal. Need to write it to the instance terminal
@@ -38,8 +39,6 @@ func (h *Handler) WS(so socketio.Socket) {
 		// User resized his viewport
 		c.ViewPort.Cols = cols
 		c.ViewPort.Rows = rows
-		vp := s.SessionGetSmallestViewPort()
-		h.So.BroadcastTo(sessionId, "viewport resize", vp.Cols, vp.Rows)
 		h.notifyClientSmallestViewPort(s)
 	})
 
@@ -52,6 +51,11 @@ func (h *Handler) WS(so socketio.Socket) {
 		}
 		if len(s.Clients) > 0 {
 			h.notifyClientSmallestViewPort(s)
+		}else{
+			if s1:=h.S[sessionId];s1 != nil {
+				u := h.U[h.S[sessionId].User.Name]
+				h.SessionClose(s,u)
+			}
 		}
 	})
 }
