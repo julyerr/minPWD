@@ -55,6 +55,7 @@ func (h *Handler) WS(so socketio.Socket) {
 			if s1:=h.S[sessionId];s1 != nil {
 				u := h.U[h.S[sessionId].User.Name]
 				h.SessionClose(s,u)
+				log.Printf("no client connected,close session %s automaticly",sessionId)
 			}
 		}
 	})

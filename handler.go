@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/docker/distribution/reference"
+	"github.com/googollee/go-socket.io"
+	"github.com/gorilla/mux"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/googollee/go-socket.io"
-	"github.com/gorilla/mux"
 	"golang.org/x/text/encoding"
 	"io"
 	"log"
@@ -126,7 +126,7 @@ func (h *Handler) SessionStore(w http.ResponseWriter, r *http.Request) {
 	for i, instance := range s.Instances {
 		id, err := h.C.ContainerCommit(context.Background(), instance.Name, types.ContainerCommitOptions{})
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -136,8 +136,9 @@ func (h *Handler) SessionStore(w http.ResponseWriter, r *http.Request) {
 			images[i] = id.ID
 		}
 	}
-	u.Sessions[sessionId].Instances = images
-	u.Sessions[sessionId].Resumed = false
+	eachSession := &EachSession{Instances:images,Resumed:false,Experiment:s.User.Sessions[sessionId].Experiment,
+	ImageName:s.User.Sessions[sessionId].ImageName}
+	u.Sessions[sessionId]=eachSession
 	h.So.BroadcastTo(sessionId, "session stored", sessionId)
 	err := h.StoreSessionDB(u, sessionId, body.Content)
 	if err != nil {
@@ -155,7 +156,10 @@ func (h *Handler) SessionResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionId := vars["sessionId"]
-
+	if h.S[sessionId] != nil{
+		w.Write([]byte("<a href=\"http://"+r.Host + "/p/" + sessionId+"\">click here to jump</a>"))
+		return
+	}
 	s := &Session{}
 	s.User = &User{}
 	s.User = h.U[username]
@@ -178,7 +182,7 @@ func (h *Handler) SessionResume(w http.ResponseWriter, r *http.Request) {
 	}
 	//waiting for client to get the session first
 	//time.Sleep(time.Second * 1)
-	w.Write([]byte(r.Host + "," + s.Id))
+	w.Write([]byte("<a href=\"http://"+r.Host + "/p/" + s.Id+"\">click here to jump</a>"))
 	//http.Redirect(w, r, fmt.Sprintf("http://%s/p/%s", r.Host, s.Id), http.StatusFound)
 }
 
@@ -195,6 +199,14 @@ func (h *Handler) SessionDelete(w http.ResponseWriter, r *http.Request) {
 	if s != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
+	}
+	for _,v := range h.U[username].Sessions[sessionId].Instances {
+		_, err := h.C.ImageRemove(context.Background(),v,types.ImageRemoveOptions{})
+		if err != nil {
+			log.Println(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 	}
 	err := h.DeleteSessionDB(u, sessionId)
 	if err != nil {
@@ -224,7 +236,7 @@ func (h *Handler) ContainerCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	instance, err := h.containerCreate(s, body.Hostname, body.ImageName)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -251,7 +263,8 @@ func (h *Handler) ContainerRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	err := h.C.ContainerRemove(context.Background(), instance.Name, types.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		delete(s.Instances, instanceName)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -263,7 +276,7 @@ func (h *Handler) InstanceAttach(i *Instance, s *Session) {
 	conf := types.ContainerAttachOptions{true, true, true, true, "ctrl-^,ctrl-^", true}
 	conn, err := h.C.ContainerAttach(context.Background(), i.Name, conf)
 	if err != nil {
-		log.Fatal("container attach failed")
+		log.Println("container attach failed")
 		return
 	}
 	iw := &InstanceWriter{Handler: h, Instance: i, Session: s}
@@ -330,3 +343,4 @@ func (h *Handler) ExperimentContentGet(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Write([]byte(content))
 }
+

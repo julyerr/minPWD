@@ -45,12 +45,13 @@ func (h *Handler)SessionNew(r *http.Request) (*Session){
 	s.Instances = make(map[string]*Instance)
 	s.Id = uuid.NewV4().String()
 	s.User = &User{}
+	s.User.Sessions=make(map[string]*EachSession)
 	var imageName,experiment string
-	if Debug{
+	r.ParseForm()
+	if Debug && r.Form.Get("name") == "" {
 		s.User.Name = "teacher1"
 		s.User.IsTeacher = true
 	}else{
-		r.ParseForm()
 		s.User.Name=r.Form.Get("name")
 		imageName =r.Form.Get("image")
 		experiment =r.Form.Get("experiment")
@@ -65,22 +66,23 @@ func (h *Handler)SessionNew(r *http.Request) (*Session){
 	if _,exits := h.U[s.User.Name]; !exits{
 		h.U[s.User.Name] = &User{Name:s.User.Name,IsTeacher:s.User.IsTeacher}
 		h.U[s.User.Name].Sessions = make(map[string]*EachSession)
-		eachSession := &EachSession{ImageName:imageName,Experiment:experiment,Resumed:false}
-		eachSession.Instances = make(map[string]string)
-		h.U[s.User.Name].Sessions[s.Id]=eachSession
 	}else{
-		s.User.Sessions=h.U[s.User.Name].Sessions
 		fmt.Printf("User %s info has been stored :\n",s.User.Name)
 		for k,v := range h.U[s.User.Name].Sessions {
+			eachSession := &EachSession{ImageName:v.ImageName,Experiment:v.Experiment,Instances:make(map[string]string),
+			Resumed:v.Resumed}
+			s.User.Sessions[k]=eachSession
 			fmt.Printf("Session id %s :\n",k)
 			for name,image := range v.Instances{
 				fmt.Printf("name %s image %s:\n",name,image)
 			}
 		}
 	}
+	eachSession := &EachSession{ImageName:imageName,Experiment:experiment,Resumed:false}
+	eachSession.Instances = make(map[string]string)
+	s.User.Sessions[s.Id]=eachSession
 	return s
 }
-
 
 func (h *Handler)SessionClose(s *Session,u *User) error{
 	s.Lock()
@@ -93,7 +95,7 @@ func (h *Handler)SessionClose(s *Session,u *User) error{
 			return err
 		}
 	}
-	if u.Sessions[s.Id].Resumed {
+	if u.Sessions[s.Id] != nil && u.Sessions[s.Id].Resumed {
 		u.Sessions[s.Id].Resumed = false
 	}
 	delete(h.S,s.Id)

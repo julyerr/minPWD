@@ -10,18 +10,29 @@ import (
 //isTeacher = db.Column(db.Boolean)
 //experiment = db.Column(db.String(40))
 
-func (h *Handler) StoreSessionDB(u *User,sessionId ,content string) error{
-	_,err := h.Db.Exec("INSERT INTO `sessions`(`sessionId`,`sessionComment`,`name`,`experiment`,`isTeacher`,`image`) VALUES "+
-	"(",sessionId,content,u.Name,u.Sessions[sessionId].Experiment,u.IsTeacher,u.Sessions[sessionId].ImageName,")")
+func CheckError(err error) error{
 	if err != nil{
-		log.Println("insert sessions error",err.Error())
+		log.Println("error ",err.Error())
+		return err
+	}
+	return nil
+}
+
+
+
+func (h *Handler) StoreSessionDB(u *User,sessionId ,content string) error{
+	stmt,err := h.Db.Prepare("INSERT INTO `sessions`(`sessionId`,`sessionComment`,`name`,`experiment`,`isTeacher`,`image`) VALUES(?,?,?,?,?,?)")
+	if CheckError(err) != nil{
+		return err
+	}
+	_, err = stmt.Exec(sessionId,content,u.Name,u.Sessions[sessionId].Experiment,u.IsTeacher,u.Sessions[sessionId].ImageName)
+	if CheckError(err) != nil{
 		return err
 	}
 	for k,v := range u.Sessions[sessionId].Instances{
-		_,err =h.Db.Exec("INSERT INTO `images` (`imageId`,`hostname`,`sessionId`) VALUES"+
-		"(",v,k,sessionId,")")
-		if err != nil{
-			log.Println("insert sessions error",err.Error())
+		stmt , err := h.Db.Prepare("INSERT INTO `images` (`imageId`,`hostname`,`sessionId`) VALUES(?,?,?)")
+		_,err =stmt.Exec(v,k,sessionId)
+		if CheckError(err) != nil{
 			return err
 		}
 	}
@@ -30,13 +41,11 @@ func (h *Handler) StoreSessionDB(u *User,sessionId ,content string) error{
 
 func (h *Handler) DeleteSessionDB(u *User,sessionId string) error{
 	_,err := h.Db.Exec("DELETE FROM `images` WHERE `sessionId`=?",sessionId)
-	if err != nil{
-		log.Println("delete images from session failed ",err)
+	if CheckError(err) != nil{
 		return err
 	}
 	_,err = h.Db.Exec("DELETE FROM `sessions` WHERE `sessionId`=?",sessionId)
-	if err != nil{
-		log.Println("delete images from session failed ",err)
+	if CheckError(err) != nil{
 		return err
 	}
 	return nil
@@ -45,15 +54,14 @@ func (h *Handler) DeleteSessionDB(u *User,sessionId string) error{
 func (h *Handler) UserFromDB(){
 	h.U = make(map[string]*User)
 	rows,err := h.Db.Query("SELECT * FROM `sessions`")
-	if err != nil{
-		log.Println("fetch user info from db failed ",err.Error())
+	if CheckError(err) != nil{
 		return
 	}
 	defer rows.Close()
 	for rows.Next(){
 		var sessionId,sessionComment,name,image,experiment string
 		var isTeacher bool
-		rows.Scan(&sessionId,&sessionComment,&name,&image,&experiment,&isTeacher)
+		rows.Scan(&sessionId,&sessionComment,&name,&experiment,&isTeacher,&image)
 		log.Println("fetch user info :",name)
 		u := h.U[name]
 		if u== nil{
@@ -64,9 +72,8 @@ func (h *Handler) UserFromDB(){
 		images := make(map[string]string)
 
 		rows1,err := h.Db.Query("SELECT * from `images`")
-		if err != nil{
-			log.Printf("fetch image info from session %s failed ",sessionId,err.Error())
-			return
+		if CheckError(err) != nil{
+			return 
 		}
 		defer rows1.Close()
 
@@ -74,7 +81,7 @@ func (h *Handler) UserFromDB(){
 			var imageId,hostname string
 			rows1.Scan(&imageId,&hostname)
 			images[hostname]=imageId
-			log.Println("load images from session %s ",sessionId)
+			log.Printf("load images from session %s ",sessionId)
 		}
 		eachSession := &EachSession{Experiment:experiment,Resumed:false,ImageName:image,Instances:images}
 		h.U[name].Sessions[sessionId]=eachSession
@@ -82,9 +89,8 @@ func (h *Handler) UserFromDB(){
 }
 
 func (h *Handler) ImageSearchDB(term string,limit int) ([]string,error){
-	rows,err := h.Db.Query("SELECT * FROM `containers` WHERE name LIKE "+"%"+term+"%"+" Limit ",limit)
-	if err != nil{
-		log.Println("image search db faile ",err.Error())
+	rows,err := h.Db.Query("SELECT * FROM `containers` WHERE name LIKE \"%"+term+"%\" Limit ? ",limit)
+	if CheckError(err) != nil{
 		return nil,err
 	}
 	images := []string{}
@@ -99,9 +105,8 @@ func (h *Handler) ImageSearchDB(term string,limit int) ([]string,error){
 
 func (h *Handler) experimentContentGetDB(experiment string) (string,error){
 	var content string
-	err := h.Db.QueryRow("SELECT content FROM `experiment` WHERE name = ",experiment).Scan(&content)
-	if err != nil{
-		log.Printf("fetch experiment %s content failed ",experiment,err.Error())
+	err := h.Db.QueryRow("SELECT content FROM `experiments` WHERE name = ?",experiment).Scan(&content)
+	if CheckError(err) != nil{
 		return "",err
 	}
 	return content,nil

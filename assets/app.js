@@ -175,9 +175,7 @@
                 window.onbeforeunload = null;
                 $scope.socket.emit('session close',$scope.username);
                 $scope.showAlert("success","session resume has been successfully,please wait for a while ...");
-                var a = response.data.split(",");
-                console.log(a)
-                document.write('<a href="/p/'+a[1]+'"'+'>click here jump</a>')
+                document.write(response.data)
             },function (response) {
                 $scope.showAlert("session resume failed","session resume failed");
             }).finally(function () {
@@ -288,16 +286,20 @@
                 }
                 $scope.username = i.user.name;
                 $scope.IsTeacher = i.user.is_teacher;
-                $scope.experiment = i.user.sessions.experiment;
+		 $scope.experiment = i.user.sessions[$scope.sessionId].experiment
 
                 console.log("info from session: "+$scope.username+" "+$scope.IsTeacher)
-                if(i.user.sessions.image_name != ""){
-                    console.log("info from session image: "+i.user.sessions.image_name)
-                    InstanceService.setDesiredImage(i.user.sessions.image_name)
-                    $scope.ImageName = i.user.sessions.image_name;
+                var session = i.user.sessions[$scope.sessionId]
+                if(session !=null && session.image_name != ""){
+                    console.log("current session info :",session)
+                    console.log("info from session image: "+session.image_name)
+                    InstanceService.setDesiredImage(session.image_name)
+                    $scope.ImageName = session.image_name;
                 }
                 for (var i in i.user.sessions){
-                    $scope.sessions.push(i);
+                    if(i != $scope.sessionId) {
+                        $scope.sessions.push(i);
+                    }
                 }
                 if (!$scope.IsTeacher) {
                     $http({
@@ -721,3 +723,4 @@
             }
         }]);
 })();
+
