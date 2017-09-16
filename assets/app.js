@@ -21,6 +21,7 @@
         $scope.IsTeacher = false;
         $scope.username = '';
         $scope.experiment='';
+        $scope.experimentContent = '';
         $scope.sessionContent = '';
         $scope.sessions = [];
         $scope.sessionToResume=function (value) {
@@ -94,7 +95,7 @@
                 .title('Please add comment to the session stored')
                 .placeholder('Session')
                 .ariaLabel('Session')
-                .initialValue('session is stored for ...')
+                .initialValue('session is stored for ...'+$scope.sessionId)
                 // .required(true)
                 .ok('Okay!');
 
@@ -167,12 +168,12 @@
                 return
             }
             console.log("session to store: "+session);
-            window.onbeforeunload = null;
-            $scope.socket.emit('session close',$scope.username);
             $http({
                 method: 'GET',
                 url: '/users/' + $scope.username + '/sessions/' + session + '/resume'
             }).then(function(response){
+                window.onbeforeunload = null;
+                $scope.socket.emit('session close',$scope.username);
                 $scope.showAlert("success","session resume has been successfully,please wait for a while ...");
                 var a = response.data.split(",");
                 console.log(a)
@@ -287,16 +288,26 @@
                 }
                 $scope.username = i.user.name;
                 $scope.IsTeacher = i.user.is_teacher;
-                //TODO:对于以后的experiment content 考虑发起请求获取
-                $scope.experiment=i.user.experiment;
-                console.log("info from session: "+$scope.username+" "+$scope.IsTeacher+" "+$scope.experiment)
-                if(i.user.image_name != ""){
-                    console.log("info from session image: "+i.user.image_name)
-                    InstanceService.setDesiredImage(i.user.image_name)
-                    $scope.ImageName = i.user.image_name;
+                $scope.experiment = i.user.sessions.experiment;
+
+                console.log("info from session: "+$scope.username+" "+$scope.IsTeacher)
+                if(i.user.sessions.image_name != ""){
+                    console.log("info from session image: "+i.user.sessions.image_name)
+                    InstanceService.setDesiredImage(i.user.sessions.image_name)
+                    $scope.ImageName = i.user.sessions.image_name;
                 }
                 for (var i in i.user.sessions){
                     $scope.sessions.push(i);
+                }
+                if (!$scope.IsTeacher) {
+                    $http({
+                        method: 'POST',
+                        url: '/experiment/' + $scope.experiment
+                    }).then(function (response) {
+                        $scope.experimentContent = response.data
+                    }, function (response) {
+                        $scope.showAlert("experiment error ", "get experiment content error")
+                    })
                 }
                 // If instance is passed in URL, select it
                 let inst = $scope.idx[$location.hash()];
@@ -575,7 +586,7 @@
             function prepopulateAvailableImages(value,cb) {
                 $http({
                     method: 'POST',
-                    url: '/images/search',
+                    url: '/images/local/search',
                     data : { Term : value.term, LimitNum :parseInt(value.limitNum)  }
                 }).then(function(response) {
                     instanceImages = response.data;

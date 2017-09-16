@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/docker/distribution/reference"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/googollee/go-socket.io"
 	"github.com/gorilla/mux"
-	"github.com/moby/moby/api/types"
-	"github.com/moby/moby/client"
-	"github.com/moby/moby/pkg/jsonmessage"
 	"golang.org/x/text/encoding"
 	"io"
 	"log"
@@ -24,6 +25,7 @@ type Handler struct {
 	S         map[string]*Session
 	U         map[string]*User
 	Instances map[string]*Instance
+	Db        *sql.DB
 }
 
 type InstanceWriter struct {
@@ -38,9 +40,7 @@ func (iw *InstanceWriter) Write(p []byte) (n int, err error) {
 }
 
 func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
-	body := &User{}
-	json.NewDecoder(r.Body).Decode(&body)
-	s := h.SessionNew(body)
+	s := h.SessionNew(r)
 	http.Redirect(w, r, fmt.Sprintf("http://%s/p/%s", r.Host, s.Id), http.StatusFound)
 }
 
@@ -84,28 +84,44 @@ func (h *Handler) ImageSearch(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(imageNames)
 }
 
+func (h *Handler) LocalImageSearch(w http.ResponseWriter, r *http.Request) {
+	body := &ImageSearchConfig{}
+	json.NewDecoder(r.Body).Decode(&body)
+	log.Printf("searching image %s, limit %d\n", body.Term, body.LimitNum)
+	images, err := h.ImageSearchDB(body.Term, body.LimitNum)
+	if err != nil {
+		log.Println("image search failed")
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	json.NewEncoder(w).Encode(images)
+}
+
 func (h *Handler) SessionStore(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	//对于用户输入的情况下进行条件判断 是否存在
 	username := vars["username"]
 	sessionId := vars["sessionId"]
-	u ,s := h.U[username],h.S[sessionId]
-	if u == nil||s == nil{
+	u, s := h.U[username], h.S[sessionId]
+	if u == nil || s == nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	body := &SessionContent{}
 	json.NewDecoder(r.Body).Decode(&body)
-	if len(u.Sessions) >= 1 {
-		w.WriteHeader(http.StatusConflict)
-		return
-	}
+	sessionNum := 0
 	for k, _ := range u.Sessions {
 		if k == sessionId {
 			w.WriteHeader(http.StatusNotAcceptable)
 			return
 		}
+		if sessionNum >= 1 {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		sessionNum += 1
 	}
+
 	images := make(map[string]string)
 	for i, instance := range s.Instances {
 		id, err := h.C.ContainerCommit(context.Background(), instance.Name, types.ContainerCommitOptions{})
@@ -114,22 +130,27 @@ func (h *Handler) SessionStore(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		if strings.Contains(id.ID,"sha256") {
-			images[i]=id.ID[7:17]
-		}else{
-			images[i]=id.ID
+		if strings.Contains(id.ID, "sha256") {
+			images[i] = id.ID[7:17]
+		} else {
+			images[i] = id.ID
 		}
 	}
-	u.Sessions[sessionId] = images
-	u.Resumes[sessionId]=false
+	u.Sessions[sessionId].Instances = images
+	u.Sessions[sessionId].Resumed = false
 	h.So.BroadcastTo(sessionId, "session stored", sessionId)
+	err := h.StoreSessionDB(u, sessionId, body.Content)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 }
 
 func (h *Handler) SessionResume(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	username := vars["username"]
 	u := h.U[username]
-	if u == nil{
+	if u == nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -141,23 +162,23 @@ func (h *Handler) SessionResume(w http.ResponseWriter, r *http.Request) {
 	s.Instances = make(map[string]*Instance)
 	s.Id = sessionId
 	h.S[s.Id] = s
-	if ! u.Resumes[sessionId] {
+	if !u.Sessions[sessionId].Resumed {
 
 		go func() {
-			for k, v := range u.Sessions[sessionId] {
+			for k, v := range u.Sessions[sessionId].Instances {
 				if _, err := h.containerCreate(s, k, v); err != nil {
 					//w.WriteHeader(http.StatusInternalServerError)
 					return
 				}
-				u.Resumes[sessionId] = true
+				u.Sessions[sessionId].Resumed = true
 			}
 		}()
-	}else{
-		fmt.Printf("User %s session %s has been resumed\n",username,sessionId)
+	} else {
+		fmt.Printf("User %s session %s has been resumed\n", username, sessionId)
 	}
 	//waiting for client to get the session first
 	//time.Sleep(time.Second * 1)
-	w.Write([]byte(r.Host+","+s.Id))
+	w.Write([]byte(r.Host + "," + s.Id))
 	//http.Redirect(w, r, fmt.Sprintf("http://%s/p/%s", r.Host, s.Id), http.StatusFound)
 }
 
@@ -165,14 +186,19 @@ func (h *Handler) SessionDelete(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	username := vars["username"]
 	sessionId := vars["sessionId"]
-	u ,s := h.U[username],h.S[sessionId]
-	if u == nil{
+	u, s := h.U[username], h.S[sessionId]
+	if u == nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	//该session正被使用
 	if s != nil {
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	err := h.DeleteSessionDB(u, sessionId)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	delete(u.Sessions, sessionId)
@@ -188,7 +214,7 @@ func (h *Handler) ContainerCreate(w http.ResponseWriter, r *http.Request) {
 	body := &InstanceConfig{}
 	json.NewDecoder(r.Body).Decode(&body)
 	s := h.S[sessionId]
-	if s == nil{
+	if s == nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -216,7 +242,7 @@ func (h *Handler) ContainerRemove(w http.ResponseWriter, r *http.Request) {
 	//TODO:对于一些可能恶意攻击的请求，可能导致出错，后面加强判断和处理
 	s := h.S[sessionId]
 	instance := s.Instances[instanceName]
-	if s== nil || instance == nil{
+	if s == nil || instance == nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -292,4 +318,15 @@ func (h *Handler) pullImage(ctx context.Context, image string) error {
 		os.Stdout.Fd(),
 		false,
 		nil)
+}
+
+func (h *Handler) ExperimentContentGet(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	experiment := vars["experiment"]
+	content, err := h.experimentContentGetDB(experiment)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Write([]byte(content))
 }

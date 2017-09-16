@@ -1,13 +1,16 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
+	"github.com/docker/docker/client"
 	"github.com/googollee/go-socket.io"
 	"github.com/gorilla/mux"
-	"github.com/moby/moby/client"
 	"log"
 	"net/http"
 	"time"
+	// 引入数据库驱动注册及初始化
+	_ "github.com/go-sql-driver/mysql"
 )
 
 var Port string
@@ -19,9 +22,22 @@ func ParseFlags() {
 	flag.Parse()
 }
 
+//设计软件需要考虑bug情况，最小恢复损失状态
+/*
+整个程序退出，运行的docker全部结束了
+但是保存的session还是可以使用的
+*/
 //TODO:如果改用数据库而不是内存存储的话，考虑初始化的时候将数据从数据库加载进内存
 
 func main() {
+	db, err := sql.Open("mysql",
+		"root:root@tcp(127.0.0.1:3306)/step1")
+	if err != nil {
+		panic(err)
+		return
+	}
+	defer db.Close()
+
 	ParseFlags()
 	handler := &Handler{}
 	c, err := client.NewEnvClient()
@@ -39,7 +55,9 @@ func main() {
 	handler.So = server
 
 	handler.S = make(map[string]*Session)
-	handler.U = make(map[string]*User)
+
+	handler.Db = db
+	handler.UserFromDB()
 
 	r := mux.NewRouter()
 	r.PathPrefix("/assets").Handler(http.FileServer(http.Dir("./")))
@@ -54,6 +72,8 @@ func main() {
 	r.HandleFunc("/users/{username}/sessions/{sessionId}/delete", handler.SessionDelete).Methods("POST")
 	r.HandleFunc("/sessions/{sessionId}/instances/create", handler.ContainerCreate).Methods("POST")
 	r.HandleFunc("/images/search", handler.ImageSearch).Methods("POST")
+	r.HandleFunc("/images/local/search", handler.LocalImageSearch).Methods("POST")
+	r.HandleFunc("/experiment/{experiment}", handler.ExperimentContentGet).Methods("POST")
 	r.Handle("/sessions/{sessionId}/ws/", server)
 	httpServer := http.Server{
 		Addr:              "0.0.0.0:" + Port,
