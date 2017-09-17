@@ -71,17 +71,17 @@ func (h *Handler) UserFromDB(){
 		}
 		images := make(map[string]string)
 
-		rows1,err := h.Db.Query("SELECT * from `images`")
+		rows1,err := h.Db.Query("SELECT * from `images` WHERE sessionId = ?",sessionId)
 		if CheckError(err) != nil{
 			return 
 		}
 		defer rows1.Close()
 
 		for rows1.Next(){
-			var imageId,hostname string
-			rows1.Scan(&imageId,&hostname)
+			var imageId,hostname,session string
+			rows1.Scan(&imageId,&hostname,&session)
 			images[hostname]=imageId
-			log.Printf("load images from session %s ",sessionId)
+			log.Printf("load images %s hostname %s from session %s ",imageId,hostname,session)
 		}
 		eachSession := &EachSession{Experiment:experiment,Resumed:false,ImageName:image,Instances:images}
 		h.U[name].Sessions[sessionId]=eachSession

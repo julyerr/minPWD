@@ -115,7 +115,7 @@ func (h *Handler) SessionStore(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotAcceptable)
 			return
 		}
-		if sessionNum >= 1 {
+		if sessionNum >= 2 {
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
@@ -151,26 +151,34 @@ func (h *Handler) SessionResume(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	username := vars["username"]
 	u := h.U[username]
-	if u == nil {
+	sessionId := vars["sessionId"]
+	if u == nil || h.U[username].Sessions[sessionId] == nil{
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	sessionId := vars["sessionId"]
 	if h.S[sessionId] != nil{
 		w.Write([]byte("<a href=\"http://"+r.Host + "/p/" + sessionId+"\">click here to jump</a>"))
 		return
 	}
+	fmt.Println("session resuming , h.S not exists , creating...")
 	s := &Session{}
 	s.User = &User{}
-	s.User = h.U[username]
-	s.Instances = make(map[string]*Instance)
+	s.User.Name = username
+	s.User.IsTeacher = h.U[username].IsTeacher
+	s.User.Sessions=make(map[string]*EachSession)
+	for k,v := range h.U[username].Sessions {
+		eachSession := &EachSession{ImageName:v.ImageName,Experiment:v.Experiment,Instances:make(map[string]string),
+			Resumed:v.Resumed}
+		s.User.Sessions[k]=eachSession
+	}
 	s.Id = sessionId
 	h.S[s.Id] = s
 	if !u.Sessions[sessionId].Resumed {
 
 		go func() {
 			for k, v := range u.Sessions[sessionId].Instances {
-				if _, err := h.containerCreate(s, k, v); err != nil {
+				fmt.Println("resuming create container,hostname,images:",k,v)
+				if _, err := h.containerCreate(s, "", v); err != nil {
 					//w.WriteHeader(http.StatusInternalServerError)
 					return
 				}
