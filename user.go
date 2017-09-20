@@ -1,15 +1,20 @@
 package main
 
+import "sync"
 
 type User struct{
-	Name string `json:"name"`
+	UserName string `json:"user_name"`
 	IsTeacher bool `json:"is_teacher"`
-	Sessions map[string]*EachSession `json:"sessions"`
+	ActiveSessions map[string]*Session `json:"-"`
+	StoredSessions map[string]*Session `json:"-"`
+	rw sync.Mutex
 }
 
-type EachSession struct{
-	ImageName string `json:"image_name"`
-	Experiment string `json:"experiment"`
-	Resumed bool `json:"resumed"`
-	Instances map[string]string `json:"instances"`
+func (u *User) Lock(){
+	u.rw.Lock()
 }
+
+func (u *User) Unlock(){
+	u.rw.Unlock()
+}
+

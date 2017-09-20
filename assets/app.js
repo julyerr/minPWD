@@ -5,6 +5,8 @@
 
     app.controller('PlayController', ['$scope', '$log', '$http', '$location', '$timeout', '$mdDialog', '$window', 'TerminalService', 'KeyboardShortcutService', 'InstanceService', function($scope, $log, $http, $location, $timeout, $mdDialog, $window, TerminalService, KeyboardShortcutService, InstanceService) {
         $scope.sessionId = getCurrentSessionId();
+        $scope.IsTeacher = false;
+        $scope.username = getCurrentUserName();
         $scope.instances = [];
         $scope.idx = {};
         $scope.selectedInstance = null;
@@ -18,12 +20,12 @@
         $scope.isSessionBeingStoring = false;
         $scope.resumeSessionBtnText = 'Resume';
         $scope.isSessionBeingResuming = false;
-        $scope.IsTeacher = false;
-        $scope.username = '';
         $scope.experiment='';
         $scope.experimentContent = '';
         $scope.sessionContent = '';
         $scope.sessions = [];
+        $scope.data={};
+        $scope.data.IsMount = false;
         $scope.sessionToResume=function (value) {
             if (value !== undefined){
                 localStorage.setItem("sessionToResume",value);
@@ -50,7 +52,10 @@
         });
 
         function getCurrentSessionId() {
-            return window.location.pathname.replace('/p/', '');
+            return window.location.pathname.replace(/\/users\/(.+)\/p\/(.+)/gi, "$2");
+        }
+        function getCurrentUserName(){
+            return window.location.pathname.replace(/\/users\/(.+)\/p\/(.+)/gi,"$1");
         }
         $scope.showAlert = function(title, content, parent) {
             $mdDialog.show(
@@ -77,15 +82,15 @@
 
         $scope.upsertInstance = function(info) {
             var i = info;
-            if (!$scope.idx[i.name]) {
+            if (!$scope.idx[i.instance_name]) {
                 $scope.instances.push(i);
                 i.buffer = '';
-                $scope.idx[i.name] = i;
+                $scope.idx[i.instance_name] = i;
             } else {
-                $scope.idx[i.name].ip = i.ip;
-                $scope.idx[i.name].hostname = i.hostname;
+                $scope.idx[i.instance_name].ip = i.ip;
+                $scope.idx[i.instance_name].hostname = i.hostname;
             }
-            return $scope.idx[i.name];
+            return $scope.idx[i.instance_name];
         }
 
 
@@ -97,6 +102,7 @@
                 .ariaLabel('Session')
                 .initialValue('session is stored for ...'+$scope.sessionId)
                 // .required(true)
+                .cancel("Cancel")
                 .ok('Okay!');
 
             $mdDialog.show(confirm).then(function(result) {
@@ -113,7 +119,8 @@
             $http({
                 method: 'POST',
                 url: '/users/' + $scope.username + '/sessions/' + $scope.sessionId + '/store',
-                data: {Name: $scope.sessionId, Content: $scope.sessionContent}
+                data: {name: $scope.sessionId, content: $scope.sessionContent},
+                headers: {'Content-Type': 'application/json'},
             }).then(function(response){
                 $scope.showAlert("success","you have successfully store the session" +
                     "and you can delete it at your accoun center")
@@ -202,9 +209,10 @@
             }
             $http({
                 method: 'POST',
-                url: '/sessions/' + $scope.sessionId + '/instances/create',
+                url: '/users/'+$scope.username+'/sessions/' + $scope.sessionId + '/instances/create',
                 //TODO:发送mount的请求将目录进行挂载
-                data : { ImageName : ImageName }
+                data : { image_name : ImageName ,is_mount:$scope.data.IsMount},
+                headers: {'Content-Type': 'application/json'},
             }).then(function(response) {
                 console.log("new instance info:"+response.data);
                 var i = $scope.upsertInstance(response.data);
@@ -217,19 +225,19 @@
                 updateNewInstanceBtnState(false);
             });
         }
-        $scope.getSession = function(sessionId) {
+        $scope.getSession = function(username,sessionId) {
             $http({
-                method: 'GET',
-                url: '/sessions/' + $scope.sessionId,
+                method: 'POST',
+                url: '/users/'+username+'/sessions/' + $scope.sessionId,
             }).then(function(response) {
-                var socket = io({ path: '/sessions/' + sessionId + '/ws' });
+                var socket = io({ path: '/users/'+username+'/sessions/' + sessionId + '/ws' });
 
                 socket.on('terminal out', function(name, data) {
                     var instance = $scope.idx[name];
 
                     if (!instance) {
                         // instance is new and was created from another client, we should add it
-                        $scope.upsertInstance({ name: name ,hostname:hostname,ip:ip});
+                        $scope.upsertInstance({ instance_name: name});
                         instance = $scope.idx[name];
                         $scope.showInstance(instance);
                     }
@@ -246,7 +254,7 @@
                 });
 
                 socket.on('new instance', function(name, ip, hostname) {
-                    $scope.upsertInstance({ name: name, ip: ip, hostname: hostname });
+                    $scope.upsertInstance({ instance_name: name, ip: ip, hostname: hostname });
                     $scope.$apply(function() {
                         if ($scope.instances.length == 1) {
                             $scope.showInstance($scope.instances[0]);
@@ -282,25 +290,24 @@
                 for (var k in i.instances) {
                     var instance = i.instances[k];
                     $scope.instances.push(instance);
-                    $scope.idx[instance.name] = instance;
+                    $scope.idx[instance.instance_name] = instance;
                 }
-                $scope.username = i.user.name;
                 $scope.IsTeacher = i.user.is_teacher;
-		 $scope.experiment = i.user.sessions[$scope.sessionId].experiment
+                $scope.experiment = i.experiment_name;
 
                 console.log("info from session: "+$scope.username+" "+$scope.IsTeacher)
-                var session = i.user.sessions[$scope.sessionId]
-                if(session !=null && session.image_name != ""){
-                    console.log("current session info :",session)
-                    console.log("info from session image: "+session.image_name)
-                    InstanceService.setDesiredImage(session.image_name)
-                    $scope.ImageName = session.image_name;
-                }
-                for (var i in i.user.sessions){
-                    if(i != $scope.sessionId) {
-                        $scope.sessions.push(i);
+                InstanceService.setDesiredImage(i.image_name)
+                $scope.ImageName = i.image_name;
+                $http({
+                    method: 'GET',
+                    url: '/users/'+username+'/sessions/'+sessionId+'/storedSessions'
+                }).then(function (response) {
+                    for (var i in response.data){
+                        $scope.sessions.push(response.data[i]);
                     }
-                }
+                }, function (response) {
+                   console.log("get stored sessions failed")
+                })
                 if (!$scope.IsTeacher) {
                     $http({
                         method: 'POST',
@@ -324,7 +331,7 @@
 
         $scope.showInstance = function(instance) {
             $scope.selectedInstance = instance;
-            $location.hash(instance.name);
+            $location.hash(instance.instance_name);
             if (!instance.creatingTerminal) {
                 if (!instance.term) {
                     $timeout(function () {
@@ -345,7 +352,7 @@
                 delete $scope.idx[name];
                 //TODO:2:增加stop 和 start instance功能，整体显示更加友好,webscoket连接建立和回复
                 $scope.instances = $scope.instances.filter(function(i) {
-                    return i.name != name;
+                    return i.instance_name != name;
                 });
                 if ($scope.instances.length) {
                     $scope.showInstance($scope.instances[0]);
@@ -357,9 +364,9 @@
             updateDeleteInstanceBtnState(true);
             $http({
                 method: 'DELETE',
-                url: '/sessions/' + $scope.sessionId + '/instances/' + instance.name+'/delete',
+                url: '/users/'+$scope.username+'/sessions/' + $scope.sessionId + '/instances/' + instance.instance_name+'/delete',
             }).then(function(response) {
-                $scope.removeInstance(instance.name);
+                $scope.removeInstance(instance.instance_name);
             }, function(response) {
                 console.log('error', response);
             }).finally(function() {
@@ -367,14 +374,14 @@
             });
         }
 
-        $scope.getSession($scope.sessionId);
+        $scope.getSession($scope.username,$scope.sessionId);
 
         function createTerminal(instance, cb) {
             if (instance.term) {
                 return instance.term;
             }
 
-            var terminalContainer = document.getElementById('terminal-' + instance.name);
+            var terminalContainer = document.getElementById('terminal-' + instance.instance_name);
 
             var term = new Terminal({
                 cursorBlink: false
@@ -407,7 +414,7 @@
             }, 4);
 
             term.on('data', function(d) {
-                $scope.socket.emit('terminal in', instance.name, d);
+                $scope.socket.emit('terminal in', instance.instance_name, d);
             });
 
             instance.term = term;
@@ -589,7 +596,8 @@
                 $http({
                     method: 'POST',
                     url: '/images/local/search',
-                    data : { Term : value.term, LimitNum :parseInt(value.limitNum)  }
+                    data : { term : value.term, limit_num :parseInt(value.limitNum)  },
+                    headers: {'Content-Type': 'application/json'},
                 }).then(function(response) {
                     instanceImages = response.data;
                     console.log(instanceImages);
@@ -723,4 +731,5 @@
             }
         }]);
 })();
+
 

@@ -43,6 +43,11 @@
                         </md-option>
                     </md-select>
                 </md-input-container>
+                <md-input-container class="md-icon-float md-block">
+                    <md-checkbox ng-model="data.IsMount">
+                        Mount Home dir: {{ data.IsMount }}
+                    </md-checkbox>
+                </md-input-container>
                 <md-button class="md-warn md-raised"  ng-disabled="isSessionBeingResuming" ng-click="resumeSession()">Resume session</md-button>
                 <div class="md-toolbar-tools">
                     <h1 class="md-toolbar-tools">Instances</h1>
@@ -53,8 +58,8 @@
             <md-content layout-padding>
                 <md-button ng-click="newInstance()" ng-disabled="isInstanceBeingCreated" class="md-primary">{{newInstanceBtnText}}</md-button>
                 <md-list>
-                    <md-list-item class="md-3-line" ng-repeat="instance in instances" ng-click="showInstance(instance)" ng-class="instance.name == selectedInstance.name ? 'selected' : false">
-                        <p>{{instance.name}}</p>
+                    <md-list-item class="md-3-line" ng-repeat="instance in instances" ng-click="showInstance(instance)" ng-class="instance.instance_name == selectedInstance.instance_name ? 'selected' : false">
+                        <p>{{instance.instance_name}}</p>
                         <m-ddivider ng-if="!$last"></m-ddivider>
                     </md-list-item>
                 </md-list>
@@ -68,11 +73,11 @@
 
             <div flex></div>
         </md-content>
-        <md-content flex layout="column" ng-repeat="instance in instances" ng-show="instance.name == selectedInstance.name">
+        <md-content flex layout="column" ng-repeat="instance in instances" ng-show="instance.instance_name == selectedInstance.instance_name">
             <md-card class="stats" md-theme="default" md-theme-watch>
                 <md-card-title>
                     <md-card-title-text>
-                        <span class="md-headline">{{instance.name}}</span>
+                        <span class="md-headline">{{instance.instance_name}}</span>
                     </md-card-title-text>
                 </md-card-title>
                 <md-card-content>
@@ -88,7 +93,7 @@
                 </md-card-actions>
             </md-card>
             <md-card flex md-theme="default" md-theme-watch >
-                <md-card-content flex id="terminal-{{instance.name}}" class="terminal-container">
+                <md-card-content flex id="terminal-{{instance.instance_name}}" class="terminal-container">
                 </md-card-content>
             </md-card>
         </md-content>

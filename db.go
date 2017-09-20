@@ -1,96 +1,54 @@
 package main
 
 import (
+	"database/sql"
 	"log"
+	_ "github.com/go-sql-driver/mysql"
 )
 
-//sessionId = db.Column(db.String(60),nullable = False,primary_key=True)
-//sessionComment = db.Column(db.String(200))
-//name = db.Column(db.String(20),nullable=False)
-//isTeacher = db.Column(db.Boolean)
-//experiment = db.Column(db.String(40))
-
-func CheckError(err error) error{
-	if err != nil{
-		log.Println("error ",err.Error())
-		return err
-	}
-	return nil
+func DBInit() (db *sql.DB,err error){
+	db,err = sql.Open("mysql",DBSchm)
+	return
 }
 
-
-
-func (h *Handler) StoreSessionDB(u *User,sessionId ,content string) error{
-	stmt,err := h.Db.Prepare("INSERT INTO `sessions`(`sessionId`,`sessionComment`,`name`,`experiment`,`isTeacher`,`image`) VALUES(?,?,?,?,?,?)")
-	if CheckError(err) != nil{
+func StoreSessionDB(db *sql.DB,s *Session ,content string) error{
+	stmt,err := db.Prepare("INSERT INTO `sessions`(`sessionId`,`sessionComment`,`name`,`isTeacher`,`experiment`,`image`) VALUES(?,?,?,?,?,?)")
+	if CheckError(err) {
 		return err
 	}
-	_, err = stmt.Exec(sessionId,content,u.Name,u.Sessions[sessionId].Experiment,u.IsTeacher,u.Sessions[sessionId].ImageName)
-	if CheckError(err) != nil{
+	_, err = stmt.Exec(s.SessionId,content,s.User.UserName,s.User.IsTeacher,s.ExperimentName,s.ImageName)
+	if CheckError(err) {
 		return err
 	}
-	for k,v := range u.Sessions[sessionId].Instances{
-		stmt , err := h.Db.Prepare("INSERT INTO `images` (`imageId`,`hostname`,`sessionId`) VALUES(?,?,?)")
-		_,err =stmt.Exec(v,k,sessionId)
-		if CheckError(err) != nil{
+	for _,v := range s.Instances{
+		stmt , err := db.Prepare("INSERT INTO `images` (`imageId`,`sessionId`,`hostname`,`isMount`,`mountSize`,`memSize`) VALUES(?,?,?,?,?,?)")
+		_,err =stmt.Exec(v.Config.ImageName,s.SessionId,v.Config.Hostname,v.Config.IsMount,v.Config.MountSize,v.Config.MemSize)
+		if CheckError(err) {
 			return err
 		}
 	}
 	return nil
 }
 
-func (h *Handler) DeleteSessionDB(u *User,sessionId string) error{
-	_,err := h.Db.Exec("DELETE FROM `images` WHERE `sessionId`=?",sessionId)
-	if CheckError(err) != nil{
+func DeleteSessionDB(db *sql.DB,s *Session) error{
+	_,err := db.Exec("DELETE FROM `images` WHERE `sessionId`=?",s.SessionId)
+	if CheckError(err){
 		return err
 	}
-	_,err = h.Db.Exec("DELETE FROM `sessions` WHERE `sessionId`=?",sessionId)
-	if CheckError(err) != nil{
+	_,err = db.Exec("DELETE FROM `sessions` WHERE `sessionId`=?",s.SessionId)
+	if CheckError(err){
 		return err
 	}
 	return nil
 }
 
-func (h *Handler) UserFromDB(){
-	h.U = make(map[string]*User)
-	rows,err := h.Db.Query("SELECT * FROM `sessions`")
-	if CheckError(err) != nil{
-		return
+func ImageSearchDB(db *sql.DB,term string,limit int) ([]string,error){
+	log.Println("db searching,term,limit Num",term,limit)
+	if limit == 0{
+		limit = 5
 	}
-	defer rows.Close()
-	for rows.Next(){
-		var sessionId,sessionComment,name,image,experiment string
-		var isTeacher bool
-		rows.Scan(&sessionId,&sessionComment,&name,&experiment,&isTeacher,&image)
-		log.Println("fetch user info :",name)
-		u := h.U[name]
-		if u== nil{
-			u = &User{Name:name,IsTeacher:isTeacher}
-			u.Sessions=make(map[string]*EachSession)
-			h.U[name]=u
-		}
-		images := make(map[string]string)
-
-		rows1,err := h.Db.Query("SELECT * from `images` WHERE sessionId = ?",sessionId)
-		if CheckError(err) != nil{
-			return 
-		}
-		defer rows1.Close()
-
-		for rows1.Next(){
-			var imageId,hostname,session string
-			rows1.Scan(&imageId,&hostname,&session)
-			images[hostname]=imageId
-			log.Printf("load images %s hostname %s from session %s ",imageId,hostname,session)
-		}
-		eachSession := &EachSession{Experiment:experiment,Resumed:false,ImageName:image,Instances:images}
-		h.U[name].Sessions[sessionId]=eachSession
-	}
-}
-
-func (h *Handler) ImageSearchDB(term string,limit int) ([]string,error){
-	rows,err := h.Db.Query("SELECT * FROM `containers` WHERE name LIKE \"%"+term+"%\" Limit ? ",limit)
-	if CheckError(err) != nil{
+	rows,err := db.Query("SELECT * FROM `containers` WHERE name LIKE \"%"+term+"%\" Limit ? ",limit)
+	if CheckError(err){
 		return nil,err
 	}
 	images := []string{}
@@ -103,11 +61,69 @@ func (h *Handler) ImageSearchDB(term string,limit int) ([]string,error){
 	return images,nil
 }
 
-func (h *Handler) experimentContentGetDB(experiment string) (string,error){
+func ContentGetDB(db *sql.DB,experimentName string) (string,error){
 	var content string
-	err := h.Db.QueryRow("SELECT content FROM `experiments` WHERE name = ?",experiment).Scan(&content)
-	if CheckError(err) != nil{
+	err := db.QueryRow("SELECT content FROM `experiments` WHERE name = ?",experimentName).Scan(&content)
+	if CheckError(err){
 		return "",err
 	}
 	return content,nil
+}
+
+func UserFromDB(h *Handler) error{
+	rows,err := h.DB.Query("SELECT sessionId,sessionComment,name,isTeacher,experiment,image FROM `sessions`")
+	if CheckError(err){
+		return err
+	}
+	defer rows.Close()
+	for rows.Next(){
+		var sessionId,sessionComment,name,image,experiment string
+		var isTeacher bool
+		rows.Scan(&sessionId,&sessionComment,&name,&isTeacher,&experiment,&image)
+		log.Println("fetch user info :",name)
+		u := h.Users[name]
+		if u== nil{
+			u = &User{UserName:name,IsTeacher:isTeacher}
+			u.StoredSessions=make(map[string]*Session)
+			h.Users[name]=u
+		}
+		instances := make(map[string]*Instance)
+
+		rows1,err := h.DB.Query("SELECT imageId,sessionId,hostname,isMount,mountSize,memSize from `images` WHERE sessionId = ?",sessionId)
+		if CheckError(err) {
+			return err
+		}
+		defer rows1.Close()
+
+		for rows1.Next(){
+			var imageId,sessionId,hostname string
+			var isMount bool
+			var mountSize,memSize int64
+			rows1.Scan(&imageId,&sessionId,&hostname,&isMount,&mountSize,&memSize)
+			log.Printf("load image %s from session %s ",imageId,sessionId)
+			instance := &Instance{
+				Config:&InstanceConfig{
+					Hostname:hostname,
+					ImageName:imageId,
+					IsMount:isMount,
+					MountSize:mountSize,
+					MemSize:memSize,
+				},
+			}
+			instances[hostname]=instance
+		}
+
+		s:= &Session{
+			SessionId:sessionId,
+			ExperimentName:experiment,
+			ImageName:image,
+			User:h.Users[name],
+			Instances:instances,
+		}
+		if h.Users[name].StoredSessions == nil{
+			h.Users[name].StoredSessions = make(map[string]*Session)
+		}
+		h.Users[name].StoredSessions[sessionId]=s
+	}
+	return nil
 }

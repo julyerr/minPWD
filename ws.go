@@ -4,42 +4,48 @@ import (
 	"github.com/googollee/go-socket.io"
 	"fmt"
 	"log"
-	"github.com/gorilla/mux"
 )
 
-func (h *Handler) WS(so socketio.Socket) {
+func WSInit(h *Handler) (*socketio.Server,error){
+	server, err := socketio.NewServer(nil)
+	if CheckPanic(err){
+		return nil,err
+	}
+	server.On("connection", h.WS)
+	server.On("error", h.WSError)
+	return server,nil
+}
+
+func (h *Handler)WS(so socketio.Socket) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Println("Recovered from ", r)
 		}
 	}()
-	vars := mux.Vars(so.Request())
-
-	sessionId := vars["sessionId"]
-	s := h.S[sessionId]
-	if s == nil {
-		log.Printf("Session with id [%s] does not exist!\n", sessionId)
+	exits,username,sessionId := h.CheckSession(true,so.Request())
+	if !exits{
 		return
 	}
 	so.Join(sessionId)
 	c := &Client{Id:so.Id()}
+	u := h.Users[username]
+	s := u.ActiveSessions[sessionId]
 	s.Clients = append(s.Clients,c)
 
 	so.On("session close",func(username string){
-		u := h.U[username]
-		h.SessionClose(s,u)
+		SessionClose(h,u,s)
 	})
 	so.On("terminal in", func(name,data string) {
 		// User wrote something on the terminal. Need to write it to the instance terminal
-		instance := h.S[sessionId].Instances[name]
+		instance := s.Instances[name]
 		instance.WriteToTerminal(data)
 	})
 	//
 	so.On("viewport resize", func(cols, rows uint) {
 		// User resized his viewport
-		c.ViewPort.Cols = cols
-		c.ViewPort.Rows = rows
-		h.notifyClientSmallestViewPort(s)
+		c.ViewPoint.Cols = cols
+		c.ViewPoint.Rows = rows
+		NotifyClientSmallestViewPort(h,s)
 	})
 
 	so.On("disconnection", func() {
@@ -50,17 +56,17 @@ func (h *Handler) WS(so socketio.Socket) {
 			}
 		}
 		if len(s.Clients) > 0 {
-			h.notifyClientSmallestViewPort(s)
+			NotifyClientSmallestViewPort(h,s)
 		}else{
-			if s1:=h.S[sessionId];s1 != nil {
-				u := h.U[h.S[sessionId].User.Name]
-				h.SessionClose(s,u)
+			if s != nil {
+				SessionClose(h,u,s)
 				log.Printf("no client connected,close session %s automaticly",sessionId)
 			}
 		}
 	})
 }
 
-func (h *Handler) WSError(so socketio.Socket) {
+func  (h *Handler)WSError(so socketio.Socket) {
 	log.Println("error ws")
 }
+
